@@ -18,19 +18,30 @@
 */
 package org.apache.cordova.inappbrowser;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.AlertDialog;
+import android.app.DownloadManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
-import android.provider.Browser;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
+import android.database.Cursor;
 import android.graphics.Bitmap;
-import android.graphics.drawable.Drawable;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffColorFilter;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.Browser;
+import android.provider.Settings;
+import android.support.design.widget.Snackbar;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.FileProvider;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -43,6 +54,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.CookieSyncManager;
+import android.webkit.DownloadListener;
 import android.webkit.HttpAuthHandler;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -55,11 +67,13 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.Config;
 import org.apache.cordova.CordovaArgs;
 import org.apache.cordova.CordovaHttpAuthHandler;
+import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.LOG;
@@ -68,17 +82,23 @@ import org.apache.cordova.PluginResult;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.lang.reflect.InvocationTargetException;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
-import java.util.List;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.StringTokenizer;
 
 @SuppressLint("SetJavaScriptEnabled")
-public class InAppBrowser extends CordovaPlugin {
-
+public class InAppBrowser extends CordovaPlugin implements DownloadListener
+{
     private static final String NULL = "null";
     protected static final String LOG_TAG = "InAppBrowser";
     private static final String SELF = "_self";
@@ -105,6 +125,7 @@ public class InAppBrowser extends CordovaPlugin {
     private static final String HIDE_URL = "hideurlbar";
     private static final String FOOTER = "footer";
     private static final String FOOTER_COLOR = "footercolor";
+    private static final int STORAGE_PERMISSION_REQUEST = 1;
 
     private static final List customizableOptions = Arrays.asList(CLOSE_BUTTON_CAPTION, TOOLBAR_COLOR, NAVIGATION_COLOR, CLOSE_BUTTON_COLOR, FOOTER_COLOR);
 
@@ -134,6 +155,41 @@ public class InAppBrowser extends CordovaPlugin {
     private boolean showFooter = false;
     private String footerColor = "";
     private String[] allowedSchemes;
+	private DownloadManager downloadManager;
+	private Set<Long> downloadedFiles;
+	private BroadcastReceiver downloadCompleteBroadcastReceiver;
+
+	private class DownloadCompleteBroadcastReceiver extends BroadcastReceiver
+	{
+		@Override
+		public void onReceive(Context context, Intent intent)
+		{
+			InAppBrowser.this.onReceiveDownloadCompleteBroadcast(context, intent);
+		}
+	}
+
+	@Override
+	public void initialize(CordovaInterface cordova, CordovaWebView webView)
+	{
+		this.downloadCompleteBroadcastReceiver = new DownloadCompleteBroadcastReceiver();
+		this.registerDownloadCompleteReceiver();
+	}
+
+	protected void registerDownloadCompleteReceiver()
+	{
+		Context context = this.cordova.getContext();
+
+		context.registerReceiver(this.downloadCompleteBroadcastReceiver,
+			new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+
+		this.downloadManager = (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
+		this.downloadedFiles = new HashSet<>();
+	}
+
+	protected void unregisterDownloadCompleteReceiver()
+	{
+		this.cordova.getContext().unregisterReceiver(this.downloadCompleteBroadcastReceiver);
+	}
 
     /**
      * Executes the request and returns PluginResult.
@@ -317,6 +373,7 @@ public class InAppBrowser extends CordovaPlugin {
     @Override
     public void onPause(boolean multitasking) {
         if (shouldPauseInAppBrowser) {
+            this.unregisterDownloadCompleteReceiver();
             inAppWebView.onPause();
         }
     }
@@ -327,6 +384,7 @@ public class InAppBrowser extends CordovaPlugin {
     @Override
     public void onResume(boolean multitasking) {
         if (shouldPauseInAppBrowser) {
+            this.registerDownloadCompleteReceiver();
             inAppWebView.onResume();
         }
     }
@@ -335,7 +393,9 @@ public class InAppBrowser extends CordovaPlugin {
      * Called by AccelBroker when listener is to be shut down.
      * Stop listener.
      */
-    public void onDestroy() {
+    public void onDestroy()
+    {
+        this.unregisterDownloadCompleteReceiver();
         closeDialog();
     }
 
@@ -833,6 +893,7 @@ public class InAppBrowser extends CordovaPlugin {
 
                 // WebView
                 inAppWebView = new WebView(cordova.getActivity());
+                inAppWebView.setDownloadListener(InAppBrowser.this);
                 inAppWebView.setLayoutParams(new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
                 inAppWebView.setId(Integer.valueOf(6));
                 // File Chooser Implemented ChromeClient
@@ -1031,6 +1092,201 @@ public class InAppBrowser extends CordovaPlugin {
             mUploadCallback.onReceiveValue(result);
             mUploadCallback = null;
         }
+    }
+
+	protected void requestStoragePermission()
+	{
+		this.cordova.requestPermission(this, InAppBrowser.STORAGE_PERMISSION_REQUEST, Manifest.permission.WRITE_EXTERNAL_STORAGE);
+	}
+
+	protected boolean shouldShowStoragePermissionRationale()
+	{
+		return ActivityCompat.shouldShowRequestPermissionRationale(this.cordova.getActivity(),
+			Manifest.permission.WRITE_EXTERNAL_STORAGE);
+	}
+
+	@Override
+	public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException
+	{
+		if(requestCode != InAppBrowser.STORAGE_PERMISSION_REQUEST)
+		{
+			return;
+		}
+
+		boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+		boolean permanently_denied = !granted && !this.shouldShowStoragePermissionRationale();
+
+		if(permanently_denied)
+		{
+			Snackbar snackbar = Snackbar.make(this.inAppWebView.getRootView(),
+				"You must grant access to storage for Connect files to download.",
+				Snackbar.LENGTH_LONG);
+
+			snackbar.setAction("App Settings", new View.OnClickListener()
+			{
+				@Override
+				public void onClick(View view)
+				{
+					Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+						Uri.fromParts("package", InAppBrowser.this.cordova.getActivity().getPackageName(), null));
+					InAppBrowser.this.cordova.getContext().startActivity(settings);
+				}
+			});
+
+			snackbar.show();
+		}
+		else
+		{
+			this.toast(granted
+				? "Download permission granted, please try downloading your file again."
+				: "Downloads will not work without this permission.");
+		}
+	}
+
+	protected void toast(String message)
+	{
+		Toast.makeText(this.cordova.getContext(), message, Toast.LENGTH_LONG).show();
+	}
+
+	@Override
+	public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long length)
+	{
+		if(!this.cordova.hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE))
+		{
+			if(this.shouldShowStoragePermissionRationale())
+			{
+				 AlertDialog.Builder builder = new AlertDialog.Builder(this.cordova.getActivity());
+				 builder.setMessage("The Connect app needs permission to write to your downloads folder in order to download files from the resources are and your school network drives.");
+				 builder.setNegativeButton("Deny", new DialogInterface.OnClickListener()
+				 {
+					 @Override
+					 public void onClick(DialogInterface dialogInterface, int i)
+					 {
+						 toast("Your file will not download.");
+					 }
+				 });
+				 builder.setPositiveButton("Allow", new DialogInterface.OnClickListener()
+				 {
+					 @Override
+					 public void onClick(DialogInterface dialogInterface, int i)
+					 {
+						 InAppBrowser.this.requestStoragePermission();
+					 }
+				 });
+				 builder.show();
+			}
+			else
+			{
+				this.requestStoragePermission();
+			}
+
+			return;
+		}
+
+		Uri uri = Uri.parse(url);
+		String cookies = CookieManager.getInstance().getCookie(url);
+
+		DownloadManager.Request request = new DownloadManager.Request(uri);
+		request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE);
+		request.addRequestHeader("Cookie", cookies);
+		request.setVisibleInDownloadsUi(false);
+
+		long downloadId = this.downloadManager.enqueue(request);
+		this.downloadedFiles.add(downloadId);
+
+		Toast.makeText(this.cordova.getContext(), "Your file download has started, and will open when finished.", Toast.LENGTH_LONG).show();
+	}
+
+	public void onReceiveDownloadCompleteBroadcast(Context context, Intent intent)
+	{
+		long downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, 0);
+
+		if(!this.downloadedFiles.contains(downloadId))
+		{
+			return;
+		}
+
+		DownloadManager.Query query = new DownloadManager.Query();
+		query.setFilterById(downloadId);
+		Cursor cursor = this.downloadManager.query(query);
+
+		if(!cursor.moveToFirst())
+		{
+			return;
+		}
+
+		int status = cursor.getInt(cursor.getColumnIndex(DownloadManager.COLUMN_STATUS));
+
+		if(status != DownloadManager.STATUS_SUCCESSFUL)
+		{
+		    this.toast("Your download failed to complete.");
+			return;
+		}
+
+		// We need to wait for the download to actually complete to know what the real filename
+		// is in the case of the file browser, as its not accurately described by the url,
+		// only by the force download header (which downloadmanager will get correctly)
+
+		String actualFilename = cursor.getString(cursor.getColumnIndex(DownloadManager.COLUMN_TITLE));
+		String mimeType = cursor.getString(cursor.getColumnIndex(downloadManager.COLUMN_MEDIA_TYPE));
+		Uri localUri = Uri.parse(cursor.getString(cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)));
+
+        File destination = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), actualFilename);
+		destination = this.makeUnique(destination);
+		actualFilename = destination.getName();
+
+		try
+		{
+			OutputStream output = new FileOutputStream(destination);
+			InputStream source = context.getContentResolver().openInputStream(localUri);
+
+			byte[] buffer = new byte[1024];
+			int bytesRead;
+			long totalSize = 0;
+
+			while((bytesRead = source.read(buffer)) > 0)
+			{
+				totalSize += bytesRead;
+				output.write(buffer, 0, bytesRead);
+			}
+
+			source.close();
+			output.close();
+
+			this.downloadManager.remove(downloadId);
+			this.downloadManager.addCompletedDownload(actualFilename, "Connect file download", false, mimeType, destination.getPath(), totalSize, true);
+
+			Intent view = new Intent(Intent.ACTION_VIEW);
+			view.setData(FileProvider.getUriForFile(context, context.getPackageName() + ".downloadprovider", destination));
+			view.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+			this.cordova.getContext().startActivity(view);
+		}
+		catch(Exception e)
+		{
+		    this.toast("Failed to save download to your phones storage");
+		}
+	}
+
+	public File makeUnique(File file)
+    {
+        String parent = file.getParent();
+        String name = file.getName();
+        StringBuilder newName;
+        int dotPosition = name.lastIndexOf('.');
+
+        if(dotPosition < 0)
+        {
+            dotPosition = name.length();
+        }
+
+    	for(int i = 2; file.exists(); i++)
+        {
+        	newName = new StringBuilder(name);
+        	newName.insert(dotPosition, " (" + new Integer(i).toString() + ")");
+        	file = new File(parent, newName.toString());
+        }
+
+        return file;
     }
 
     /**
