@@ -65,6 +65,44 @@
         <resource-file src="src/android/res/drawable-xhdpi/ic_action_remove.png" target="res/drawable-xhdpi/ic_action_remove.png" />
         <resource-file src="src/android/res/drawable-xxhdpi/ic_action_remove.png" target="res/drawable-xxhdpi/ic_action_remove.png" />
 
+		<!-- These are required for the snackbar widget used to show a link to app
+			 settings if they've tapped "dont ask me again" after denying the permission -->
+
+		<framework src="com.android.support:appcompat-v7:26.1.0" />
+		<framework src="com.android.support:design:26.1.0" />
+
+		<!-- Similarly this is also required by snackbar, we need to override the default
+			 theme for the app to use the appcompat one as the snackbar layout includes
+			 references to styles not defined in the default NoActionBar layout -->
+
+		<edit-config file="AndroidManifest.xml" target="/manifest/application/activity[@android:name='MainActivity']" mode="merge">
+			<activity android:name="MainActivity" android:theme="@style/Theme.AppCompat.NoActionBar" />
+		</edit-config>
+
+		<!-- Needed for downloading -->
+
+		<config-file target="AndroidManifest.xml" parent="/*">
+			<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+			<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+		</config-file>
+
+		<!-- Needed for the fileprovider class so we can send ACTION_OPEN intents
+			 with a fileprovider uri -->
+
+		<resource-file src="src/android/res/xml/provider_paths.xml" target="res/xml/provider_paths.xml" />
+
+		<config-file target="AndroidManifest.xml" parent="/manifest/application">
+			<provider
+				android:authorities="${applicationId}.downloadprovider"
+				android:name="android.support.v4.content.FileProvider"
+				android:exported="false"
+				android:grantUriPermissions="true">
+				<meta-data
+					android:name="android.support.FILE_PROVIDER_PATHS"
+					android:resource="@xml/provider_paths" />
+			</provider>
+		</config-file>
+
     </platform>
 
     <!-- ios -->
