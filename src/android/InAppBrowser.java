@@ -39,9 +39,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Browser;
 import android.provider.Settings;
-import android.support.design.widget.Snackbar;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.FileProvider;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -68,6 +65,11 @@ import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.FileProvider;
+
+import com.google.android.material.snackbar.Snackbar;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.Config;

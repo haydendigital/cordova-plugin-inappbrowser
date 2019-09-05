@@ -70,6 +70,7 @@
 
 		<framework src="com.android.support:appcompat-v7:26.1.0" />
 		<framework src="com.android.support:design:26.1.0" />
+		<framework src="com.google.android.material:material:1.0.0" />
 
 		<!-- Similarly this is also required by snackbar, we need to override the default
 			 theme for the app to use the appcompat one as the snackbar layout includes
